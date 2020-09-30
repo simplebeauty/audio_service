@@ -373,6 +373,13 @@
             </list>
           </value>
         </entry>
+        <entry key="overlay_support">
+          <value>
+            <list>
+              <option value="$PROJECT_DIR$/../../../../../flutter/flutter-sdk/.pub-cache/hosted/pub.dartlang.org/overlay_support-1.0.5/lib" />
+            </list>
+          </value>
+        </entry>
         <entry key="path">
           <value>
             <list>
@@ -562,6 +569,27 @@
             </list>
           </value>
         </entry>
+        <entry key="video_player">
+          <value>
+            <list>
+              <option value="$PROJECT_DIR$/../../../../../flutter/flutter-sdk/.pub-cache/hosted/pub.dartlang.org/video_player-0.11.0/lib" />
+            </list>
+          </value>
+        </entry>
+        <entry key="video_player_platform_interface">
+          <value>
+            <list>
+              <option value="$PROJECT_DIR$/../../../../../flutter/flutter-sdk/.pub-cache/hosted/pub.dartlang.org/video_player_platform_interface-2.2.0/lib" />
+            </list>
+          </value>
+        </entry>
+        <entry key="video_player_web">
+          <value>
+            <list>
+              <option value="$PROJECT_DIR$/../../../../../flutter/flutter-sdk/.pub-cache/hosted/pub.dartlang.org/video_player_web-0.1.4/lib" />
+            </list>
+          </value>
+        </entry>
         <entry key="webview_flutter">
           <value>
             <list>
@@ -627,6 +655,7 @@
       <root url="file://$PROJECT_DIR$/../../../../../flutter/flutter-sdk/.pub-cache/hosted/pub.dartlang.org/nested-0.0.4/lib" />
       <root url="file://$PROJECT_DIR$/../../../../../flutter/flutter-sdk/.pub-cache/hosted/pub.dartlang.org/octo_image-0.3.0/lib" />
       <root url="file://$PROJECT_DIR$/../../../../../flutter/flutter-sdk/.pub-cache/hosted/pub.dartlang.org/open_file-3.0.1/lib" />
+      <root url="file://$PROJECT_DIR$/../../../../../flutter/flutter-sdk/.pub-cache/hosted/pub.dartlang.org/overlay_support-1.0.5/lib" />
       <root url="file://$PROJECT_DIR$/../../../../../flutter/flutter-sdk/.pub-cache/hosted/pub.dartlang.org/path-1.7.0/lib" />
       <root url="file://$PROJECT_DIR$/../../../../../flutter/flutter-sdk/.pub-cache/hosted/pub.dartlang.org/path_provider-1.6.14/lib" />
       <root url="file://$PROJECT_DIR$/../../../../../flutter/flutter-sdk/.pub-cache/hosted/pub.dartlang.org/path_provider_linux-0.0.1+2/lib" />
@@ -653,6 +682,9 @@
       <root url="file://$PROJECT_DIR$/../../../../../flutter/flutter-sdk/.pub-cache/hosted/pub.dartlang.org/typed_data-1.2.0/lib" />
       <root url="file://$PROJECT_DIR$/../../../../../flutter/flutter-sdk/.pub-cache/hosted/pub.dartlang.org/uuid-2.2.2/lib" />
       <root url="file://$PROJECT_DIR$/../../../../../flutter/flutter-sdk/.pub-cache/hosted/pub.dartlang.org/vector_math-2.0.8/lib" />
+      <root url="file://$PROJECT_DIR$/../../../../../flutter/flutter-sdk/.pub-cache/hosted/pub.dartlang.org/video_player-0.11.0/lib" />
+      <root url="file://$PROJECT_DIR$/../../../../../flutter/flutter-sdk/.pub-cache/hosted/pub.dartlang.org/video_player_platform_interface-2.2.0/lib" />
+      <root url="file://$PROJECT_DIR$/../../../../../flutter/flutter-sdk/.pub-cache/hosted/pub.dartlang.org/video_player_web-0.1.4/lib" />
       <root url="file://$PROJECT_DIR$/../../../../../flutter/flutter-sdk/.pub-cache/hosted/pub.dartlang.org/webview_flutter-0.3.22+1/lib" />
       <root url="file://$PROJECT_DIR$/../../../../../flutter/flutter-sdk/.pub-cache/hosted/pub.dartlang.org/xdg_directories-0.1.0/lib" />
       <root url="file://$PROJECT_DIR$/../../../../../flutter/flutter-sdk/bin/cache/pkg/sky_engine/lib" />
