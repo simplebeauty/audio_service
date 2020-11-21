@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:io' show Platform;
+import 'dart:io' show HttpOverrides, Platform;
 import 'dart:isolate';
 import 'dart:ui' as ui;
 import 'dart:ui';
@@ -101,7 +101,7 @@ class PlaybackState {
   final double speed;
 
   /// The time at which the playback position was last updated.
-  final Duration updateTime;
+  final DateTime updateTime;
 
   /// The current repeat mode.
   final AudioServiceRepeatMode repeatMode;
@@ -127,7 +127,7 @@ class PlaybackState {
       return Duration(
           milliseconds: (position.inMilliseconds +
                   ((DateTime.now().millisecondsSinceEpoch -
-                          updateTime.inMilliseconds) *
+                          updateTime.millisecondsSinceEpoch) *
                       (speed ?? 1.0)))
               .toInt());
     } else {
@@ -182,7 +182,7 @@ class Rating {
   }
 
   /// Create a new star rating.
-  factory Rating.newStartRating(RatingStyle starRatingStyle, int starRating) {
+  factory Rating.newStarRating(RatingStyle starRatingStyle, int starRating) {
     if (starRatingStyle != RatingStyle.range3stars &&
         starRatingStyle != RatingStyle.range4stars &&
         starRatingStyle != RatingStyle.range5stars) {
@@ -353,7 +353,7 @@ class MediaItem {
     String displaySubtitle,
     String displayDescription,
     Rating rating,
-    Map extras,
+    Map<String, dynamic> extras,
   }) =>
       MediaItem(
         id: id ?? this.id,
@@ -513,22 +513,22 @@ const MethodChannel _channel =
 
 const String _CUSTOM_PREFIX = 'custom_';
 
-/// Client API to start and interact with the audio service.
+/// Client API to connect with and communciate with the background audio task.
 ///
-/// This class is used from your UI code to establish a connection with the
-/// audio service. While connected to the service, your UI may invoke methods
-/// of this class to start/pause/stop/etc. playback and listen to changes in
-/// playback state and playing media.
+/// You may use this API from your UI to send start/pause/play/stop/etc messages
+/// to your background audio task, and to listen to state changes broadcast by
+/// your background audio task. You may also use this API from other background
+/// isolates (e.g. android_alarm_manager) to communicate with the background
+/// audio task.
 ///
-/// Your UI must disconnect from the audio service when it is no longer visible
-/// although the audio service will continue to run in the background. If your
-/// UI once again becomes visible, you should reconnect to the audio service.
-///
-/// It is recommended to use [AudioServiceWidget] to manage this connection
-/// automatically.
+/// A client must [connect] to the service before it will be able to send
+/// messages to the background audio task, and must [disconnect] when
+/// communication is no longer required. In practice, a UI should maintain a
+/// connection exactly while it is visible. It is strongly recommended that you
+/// use [AudioServiceWidget] to manage this connection for you automatically.
 class AudioService {
   /// True if the background task runs in its own isolate, false if it doesn't.
-  static bool get usesIsolate => !(kIsWeb || Platform.isMacOS);
+  static bool get usesIsolate => !(kIsWeb || Platform.isMacOS) && !_testing;
 
   /// The root media ID for browsing media provided by the background
   /// task.
@@ -541,11 +541,18 @@ class AudioService {
   static Stream<List<MediaItem>> get browseMediaChildrenStream =>
       _browseMediaChildrenSubject.stream;
 
+  /// The children of the current browse media parent.
+  static List<MediaItem> get browseMediaChildren =>
+      _browseMediaChildrenSubject.value;
+
   static final _playbackStateSubject = BehaviorSubject<PlaybackState>();
 
   /// A stream that broadcasts the playback state.
   static Stream<PlaybackState> get playbackStateStream =>
       _playbackStateSubject.stream;
+
+  /// The current playback state.
+  static PlaybackState get playbackState => _playbackStateSubject.value;
 
   static final _currentMediaItemSubject = BehaviorSubject<MediaItem>();
 
@@ -553,37 +560,33 @@ class AudioService {
   static Stream<MediaItem> get currentMediaItemStream =>
       _currentMediaItemSubject.stream;
 
+  /// The current [MediaItem].
+  static MediaItem get currentMediaItem => _currentMediaItemSubject.value;
+
   static final _queueSubject = BehaviorSubject<List<MediaItem>>();
 
   /// A stream that broadcasts the queue.
   static Stream<List<MediaItem>> get queueStream => _queueSubject.stream;
 
+  /// The current queue.
+  static List<MediaItem> get queue => _queueSubject.value;
+
   static final _notificationSubject = BehaviorSubject<bool>.seeded(false);
 
-  /// A stream that broadcasts the status of notificationClick event.
+  /// A stream that broadcasts the status of the notificationClick event.
   static Stream<bool> get notificationClickEventStream =>
       _notificationSubject.stream;
+
+  /// The status of the notificationClick event.
+  static bool get notificationClickEvent => _notificationSubject.value;
 
   static final _customEventSubject = PublishSubject<dynamic>();
 
   /// A stream that broadcasts custom events sent from the background.
   static Stream<dynamic> get customEventStream => _customEventSubject.stream;
 
-  /// The children of the current browse media parent.
-  static List<MediaItem> get browseMediaChildren => _browseMediaChildren;
-  static List<MediaItem> _browseMediaChildren;
-
-  /// The current playback state.
-  static PlaybackState get playbackState => _playbackState;
-  static PlaybackState _playbackState;
-
-  /// The current media item.
-  static MediaItem get currentMediaItem => _currentMediaItem;
-  static MediaItem _currentMediaItem;
-
-  /// The current queue.
-  static List<MediaItem> get queue => _queue;
-  static List<MediaItem> _queue;
+  /// If a seek is in progress, this holds the position we are seeking to.
+  static Duration _seekPos;
 
   /// True after service stopped and !running.
   static bool _afterStop = false;
@@ -591,6 +594,24 @@ class AudioService {
   /// Receives custom events from the background audio task.
   static ReceivePort _customEventReceivePort;
   static StreamSubscription _customEventSubscription;
+
+  static Completer<void> _startNonIsolateCompleter;
+
+  static void _startedNonIsolate() {
+    _startNonIsolateCompleter?.complete();
+  }
+
+  /// A queue of tasks to be processed serially. Tasks that are processed on
+  /// this queue:
+  ///
+  /// - [connect]
+  /// - [disconnect]
+  /// - [start]
+  ///
+  /// TODO: Queue other tasks? Note, only short-running tasks should be queued.
+  static final _asyncTaskQueue = _AsyncTaskQueue();
+
+  static BehaviorSubject<Duration> _positionSubject;
 
   /// Connects to the service from your UI so that audio playback can be
   /// controlled.
@@ -600,101 +621,109 @@ class AudioService {
   /// other methods in this class will work only while connected.
   ///
   /// Use [AudioServiceWidget] to handle this automatically.
-  static Future<void> connect() async {
-    _channel.setMethodCallHandler((MethodCall call) async {
-      switch (call.method) {
-        case 'onChildrenLoaded':
-          final List<Map> args = List<Map>.from(call.arguments[0]);
-          _browseMediaChildren =
-              args.map((raw) => MediaItem.fromJson(raw)).toList();
-          _browseMediaChildrenSubject.add(_browseMediaChildren);
-          break;
-        case 'onPlaybackStateChanged':
-          // If this event arrives too late, ignore it.
-          if (_afterStop) return;
-          final List args = call.arguments;
-          int actionBits = args[2];
-          _playbackState = PlaybackState(
-            processingState: AudioProcessingState.values[args[0]],
-            playing: args[1],
-            actions: MediaAction.values
-                .where((action) => (actionBits & (1 << action.index)) != 0)
-                .toSet(),
-            position: Duration(milliseconds: args[3]),
-            bufferedPosition: Duration(milliseconds: args[4]),
-            speed: args[5],
-            updateTime: Duration(milliseconds: args[6]),
-            repeatMode: AudioServiceRepeatMode.values[args[7]],
-            shuffleMode: AudioServiceShuffleMode.values[args[8]],
-          );
-          _playbackStateSubject.add(_playbackState);
-          break;
-        case 'onMediaChanged':
-          _currentMediaItem = call.arguments[0] != null
-              ? MediaItem.fromJson(call.arguments[0])
-              : null;
-          _currentMediaItemSubject.add(_currentMediaItem);
-          break;
-        case 'onQueueChanged':
-          final List<Map> args = call.arguments[0] != null
-              ? List<Map>.from(call.arguments[0])
-              : null;
-          _queue = args?.map((raw) => MediaItem.fromJson(raw))?.toList();
-          _queueSubject.add(_queue);
-          break;
-        case 'onStopped':
-          _browseMediaChildren = null;
-          _browseMediaChildrenSubject.add(null);
-          _playbackState = null;
-          _playbackStateSubject.add(null);
-          _currentMediaItem = null;
-          _currentMediaItemSubject.add(null);
-          _queue = null;
-          _queueSubject.add(null);
-          _notificationSubject.add(false);
-          _running = false;
-          _afterStop = true;
-          break;
-        case 'notificationClicked':
-          _notificationSubject.add(call.arguments[0]);
-          break;
-      }
-    });
-    if (AudioService.usesIsolate) {
-      _customEventReceivePort = ReceivePort();
-      _customEventSubscription = _customEventReceivePort.listen((event) {
-        _customEventSubject.add(event);
+  static Future<void> connect() => _asyncTaskQueue.schedule(() async {
+        if (_connected) return;
+        final handler = (MethodCall call) async {
+          switch (call.method) {
+            case 'onChildrenLoaded':
+              final List<Map> args = List<Map>.from(call.arguments[0]);
+              _browseMediaChildrenSubject
+                  .add(args.map((raw) => MediaItem.fromJson(raw)).toList());
+              break;
+            case 'onPlaybackStateChanged':
+              // If this event arrives too late, ignore it.
+              if (_afterStop) return;
+              final List args = call.arguments;
+              int actionBits = args[2];
+              _playbackStateSubject.add(PlaybackState(
+                processingState: AudioProcessingState.values[args[0]],
+                playing: args[1],
+                actions: MediaAction.values
+                    .where((action) => (actionBits & (1 << action.index)) != 0)
+                    .toSet(),
+                position: Duration(milliseconds: args[3]),
+                bufferedPosition: Duration(milliseconds: args[4]),
+                speed: args[5],
+                updateTime: DateTime.fromMillisecondsSinceEpoch(args[6]),
+                repeatMode: AudioServiceRepeatMode.values[args[7]],
+                shuffleMode: AudioServiceShuffleMode.values[args[8]],
+              ));
+              break;
+            case 'onMediaChanged':
+              _currentMediaItemSubject.add(call.arguments[0] != null
+                  ? MediaItem.fromJson(call.arguments[0])
+                  : null);
+              break;
+            case 'onQueueChanged':
+              final List<Map> args = call.arguments[0] != null
+                  ? List<Map>.from(call.arguments[0])
+                  : null;
+              _queueSubject
+                  .add(args?.map((raw) => MediaItem.fromJson(raw))?.toList());
+              break;
+            case 'onStopped':
+              _browseMediaChildrenSubject.add(null);
+              _playbackStateSubject.add(null);
+              _currentMediaItemSubject.add(null);
+              _queueSubject.add(null);
+              _notificationSubject.add(false);
+              _runningSubject.add(false);
+              _afterStop = true;
+              break;
+            case 'notificationClicked':
+              _notificationSubject.add(call.arguments[0]);
+              break;
+          }
+        };
+        if (_testing) {
+          MethodChannel('ryanheise.com/audioServiceInverse')
+              .setMockMethodCallHandler(handler);
+        } else {
+          _channel.setMethodCallHandler(handler);
+        }
+        if (AudioService.usesIsolate) {
+          _customEventReceivePort = ReceivePort();
+          _customEventSubscription = _customEventReceivePort.listen((event) {
+            _customEventSubject.add(event);
+          });
+          IsolateNameServer.removePortNameMapping(_CUSTOM_EVENT_PORT_NAME);
+          IsolateNameServer.registerPortWithName(
+              _customEventReceivePort.sendPort, _CUSTOM_EVENT_PORT_NAME);
+        }
+        await _channel.invokeMethod("connect");
+        final running = await _channel.invokeMethod("isRunning");
+        if (running != AudioService.running) {
+          _runningSubject.add(running);
+        }
+        _connected = true;
       });
-      IsolateNameServer.removePortNameMapping(_CUSTOM_EVENT_PORT_NAME);
-      IsolateNameServer.registerPortWithName(
-          _customEventReceivePort.sendPort, _CUSTOM_EVENT_PORT_NAME);
-    }
-    await _channel.invokeMethod("connect");
-    _running = await _channel.invokeMethod("isRunning");
-    _connected = true;
-  }
 
   /// Disconnects your UI from the service.
   ///
   /// This method should be called when the UI is no longer visible.
   ///
   /// Use [AudioServiceWidget] to handle this automatically.
-  static Future<void> disconnect() async {
-    _channel.setMethodCallHandler(null);
-    _customEventSubscription?.cancel();
-    _customEventSubscription = null;
-    _customEventReceivePort = null;
-    await _channel.invokeMethod("disconnect");
-    _connected = false;
-  }
+  static Future<void> disconnect() => _asyncTaskQueue.schedule(() async {
+        if (!_connected) return;
+        _channel.setMethodCallHandler(null);
+        _customEventSubscription?.cancel();
+        _customEventSubscription = null;
+        _customEventReceivePort = null;
+        await _channel.invokeMethod("disconnect");
+        _connected = false;
+      });
 
   /// True if the UI is connected.
   static bool get connected => _connected;
   static bool _connected = false;
 
+  static final _runningSubject = BehaviorSubject<bool>();
+
+  /// A stream indicating when the [running] state changes.
+  static get runningStream => _runningSubject.stream;
+
   /// True if the background audio task is running.
-  static bool get running => _running;
-  static bool _running = false;
+  static bool get running => _runningSubject.value;
 
   /// Starts a background audio task which will continue running even when the
   /// UI is not visible or the screen is turned off. Only one background audio task
@@ -717,6 +746,9 @@ class AudioService {
   /// The [androidNotificationIcon] is specified like an XML resource reference
   /// and defaults to `"mipmap/ic_launcher"`.
   ///
+  /// [androidShowNotificationBadge] enable notification badges (also known as notification dots)
+  /// to appear on a launcher icon when the app has an active notification.
+  ///
   /// If specified, [androidArtDownscaleSize] causes artwork to be downscaled
   /// to the given resolution in pixels before being displayed in the
   /// notification and lock screen. If not specified, no downscaling will be
@@ -732,11 +764,18 @@ class AudioService {
   /// background audio task as properties, and they represent the duration
   /// of audio that should be skipped in fast forward / rewind operations. On
   /// iOS, these values also configure the intervals for the skip forward and
-  /// skip backward buttons.
+  /// skip backward buttons. Note that both [fastForwardInterval] and
+  /// [rewindInterval] must be positive durations.
   ///
   /// [androidEnableQueue] enables queue support on the media session on
   /// Android. If your app will run on Android and has a queue, you should set
   /// this to true.
+  ///
+  /// [androidStopForegroundOnPause] will switch the Android service to a lower
+  /// priority state when playback is paused allowing the user to swipe away the
+  /// notification. Note that while in this lower priority state, the operating
+  /// system will also be able to kill your service at any time to reclaim
+  /// resources.
   ///
   /// This method waits for [BackgroundAudioTask.onStart] to complete, and
   /// completes with true if the task was successfully started, or false
@@ -748,6 +787,7 @@ class AudioService {
     String androidNotificationChannelDescription,
     int androidNotificationColor,
     String androidNotificationIcon = 'mipmap/ic_launcher',
+    bool androidShowNotificationBadge = false,
     bool androidNotificationClickStartsActivity = true,
     bool androidNotificationOngoing = false,
     bool androidResumeOnClick = true,
@@ -757,59 +797,73 @@ class AudioService {
     Duration fastForwardInterval = const Duration(seconds: 10),
     Duration rewindInterval = const Duration(seconds: 10),
   }) async {
-    if (_running) return false;
-    _running = true;
-    _afterStop = false;
-    ui.CallbackHandle handle;
-    if (AudioService.usesIsolate) {
-      handle = ui.PluginUtilities.getCallbackHandle(backgroundTaskEntrypoint);
-      if (handle == null) {
-        return false;
+    assert(fastForwardInterval > Duration.zero,
+        "fastForwardDuration must be positive");
+    assert(rewindInterval > Duration.zero, "rewindInterval must be positive");
+    return await _asyncTaskQueue.schedule(() async {
+      if (!_connected) throw Exception("Not connected");
+      if (running) return false;
+      _runningSubject.add(true);
+      _afterStop = false;
+      ui.CallbackHandle handle;
+      if (AudioService.usesIsolate) {
+        handle = ui.PluginUtilities.getCallbackHandle(backgroundTaskEntrypoint);
+        if (handle == null) {
+          return false;
+        }
       }
-    }
 
-    var callbackHandle = handle?.toRawHandle();
-    if (kIsWeb) {
-      // Platform throws runtime exceptions on web
-    } else if (Platform.isIOS) {
-      // NOTE: to maintain compatibility between the Android and iOS
-      // implementations, we ensure that the iOS background task also runs in
-      // an isolate. Currently, the standard Isolate API does not allow
-      // isolates to invoke methods on method channels. That may be fixed in
-      // the future, but until then, we use the flutter_isolate plugin which
-      // creates a FlutterNativeView for us, similar to what the Android
-      // implementation does.
-      // TODO: remove dependency on flutter_isolate by either using the
-      // FlutterNativeView API directly or by waiting until Flutter allows
-      // regular isolates to use method channels.
-      await FlutterIsolate.spawn(_iosIsolateEntrypoint, callbackHandle);
-    }
-    final success = await _channel.invokeMethod('start', {
-      'callbackHandle': callbackHandle,
-      'params': params,
-      'androidNotificationChannelName': androidNotificationChannelName,
-      'androidNotificationChannelDescription':
-          androidNotificationChannelDescription,
-      'androidNotificationColor': androidNotificationColor,
-      'androidNotificationIcon': androidNotificationIcon,
-      'androidNotificationClickStartsActivity':
-          androidNotificationClickStartsActivity,
-      'androidNotificationOngoing': androidNotificationOngoing,
-      'androidResumeOnClick': androidResumeOnClick,
-      'androidStopForegroundOnPause': androidStopForegroundOnPause,
-      'androidEnableQueue': androidEnableQueue,
-      'androidArtDownscaleSize': androidArtDownscaleSize != null
-          ? {
-              'width': androidArtDownscaleSize.width,
-              'height': androidArtDownscaleSize.height
-            }
-          : null,
-      'fastForwardInterval': fastForwardInterval.inMilliseconds,
-      'rewindInterval': rewindInterval.inMilliseconds,
+      var callbackHandle = handle?.toRawHandle();
+      if (kIsWeb) {
+        // Platform throws runtime exceptions on web
+      } else if (Platform.isIOS) {
+        // NOTE: to maintain compatibility between the Android and iOS
+        // implementations, we ensure that the iOS background task also runs in
+        // an isolate. Currently, the standard Isolate API does not allow
+        // isolates to invoke methods on method channels. That may be fixed in
+        // the future, but until then, we use the flutter_isolate plugin which
+        // creates a FlutterNativeView for us, similar to what the Android
+        // implementation does.
+        // TODO: remove dependency on flutter_isolate by either using the
+        // FlutterNativeView API directly or by waiting until Flutter allows
+        // regular isolates to use method channels.
+        await FlutterIsolate.spawn(_iosIsolateEntrypoint, callbackHandle);
+      }
+      final success = await _channel.invokeMethod('start', {
+        'callbackHandle': callbackHandle,
+        'params': params,
+        'androidNotificationChannelName': androidNotificationChannelName,
+        'androidNotificationChannelDescription':
+            androidNotificationChannelDescription,
+        'androidNotificationColor': androidNotificationColor,
+        'androidNotificationIcon': androidNotificationIcon,
+        'androidShowNotificationBadge': androidShowNotificationBadge,
+        'androidNotificationClickStartsActivity':
+            androidNotificationClickStartsActivity,
+        'androidNotificationOngoing': androidNotificationOngoing,
+        'androidResumeOnClick': androidResumeOnClick,
+        'androidStopForegroundOnPause': androidStopForegroundOnPause,
+        'androidEnableQueue': androidEnableQueue,
+        'androidArtDownscaleSize': androidArtDownscaleSize != null
+            ? {
+                'width': androidArtDownscaleSize.width,
+                'height': androidArtDownscaleSize.height
+              }
+            : null,
+        'fastForwardInterval': fastForwardInterval.inMilliseconds,
+        'rewindInterval': rewindInterval.inMilliseconds,
+      });
+      if (!AudioService.usesIsolate) {
+        _startNonIsolateCompleter = Completer();
+        backgroundTaskEntrypoint();
+        await _startNonIsolateCompleter?.future;
+        _startNonIsolateCompleter = null;
+      }
+      if (!success) {
+        _runningSubject.add(false);
+      }
+      return success;
     });
-    _running = await _channel.invokeMethod("isRunning");
-    if (!AudioService.usesIsolate) backgroundTaskEntrypoint();
-    return success;
   }
 
   /// Sets the parent of the children that [browseMediaChildrenStream] broadcasts.
@@ -936,7 +990,9 @@ class AudioService {
   /// position in the current media item. This passes through to the `onSeekTo`
   /// method in your background audio task.
   static Future<void> seekTo(Duration position) async {
+    _seekPos = position;
     await _channel.invokeMethod('seekTo', position.inMilliseconds);
+    _seekPos = null;
   }
 
   /// Sends a request to your background audio task to skip to the next item in
@@ -1028,6 +1084,84 @@ class AudioService {
   static Future customAction(String name, [dynamic arguments]) async {
     return await _channel.invokeMethod('$_CUSTOM_PREFIX$name', arguments);
   }
+
+  /// A stream tracking the current position, suitable for animating a seek bar.
+  /// To ensure a smooth animation, this stream emits values more frequently on
+  /// short media items where the seek bar moves more quickly, and less
+  /// frequenly on long media items where the seek bar moves more slowly. The
+  /// interval between each update will be no quicker than once every 16ms and
+  /// no slower than once every 200ms.
+  ///
+  /// See [createPositionStream] for more control over the stream parameters.
+  //static Stream<Duration> _positionStream;
+  static Stream<Duration> get positionStream {
+    if (_positionSubject == null) {
+      _positionSubject = BehaviorSubject<Duration>(sync: true);
+      _positionSubject.addStream(createPositionStream(
+          steps: 800,
+          minPeriod: Duration(milliseconds: 16),
+          maxPeriod: Duration(milliseconds: 200)));
+    }
+    return _positionSubject.stream;
+  }
+
+  /// Creates a new stream periodically tracking the current position. The
+  /// stream will aim to emit [steps] position updates at intervals of
+  /// [duration] / [steps]. This interval will be clipped between [minPeriod]
+  /// and [maxPeriod]. This stream will not emit values while audio playback is
+  /// paused or stalled.
+  ///
+  /// Note: each time this method is called, a new stream is created. If you
+  /// intend to use this stream multiple times, you should hold a reference to
+  /// the returned stream.
+  static Stream<Duration> createPositionStream({
+    int steps = 800,
+    Duration minPeriod = const Duration(milliseconds: 200),
+    Duration maxPeriod = const Duration(milliseconds: 200),
+  }) {
+    assert(minPeriod <= maxPeriod);
+    assert(minPeriod > Duration.zero);
+    Duration last;
+    // ignore: close_sinks
+    StreamController<Duration> controller;
+    StreamSubscription<MediaItem> mediaItemSubscription;
+    StreamSubscription<PlaybackState> playbackStateSubscription;
+    Timer currentTimer;
+    Duration duration() => currentMediaItem?.duration ?? Duration.zero;
+    Duration step() {
+      var s = duration() ~/ steps;
+      if (s < minPeriod) s = minPeriod;
+      if (s > maxPeriod) s = maxPeriod;
+      return s;
+    }
+
+    void yieldPosition(Timer timer) {
+      if (last != (_seekPos ?? playbackState?.currentPosition)) {
+        controller.add(last = (_seekPos ?? playbackState?.currentPosition));
+      }
+    }
+
+    controller = StreamController.broadcast(
+      sync: true,
+      onListen: () {
+        mediaItemSubscription = currentMediaItemStream.listen((mediaItem) {
+          // Potentially a new duration
+          currentTimer?.cancel();
+          currentTimer = Timer.periodic(step(), yieldPosition);
+        });
+        playbackStateSubscription = playbackStateStream.listen((state) {
+          // Potentially a time discontinuity
+          yieldPosition(currentTimer);
+        });
+      },
+      onCancel: () {
+        mediaItemSubscription.cancel();
+        playbackStateSubscription.cancel();
+      },
+    );
+
+    return controller.stream;
+  }
 }
 
 /// Background API to be used by your background audio task.
@@ -1043,13 +1177,21 @@ class AudioServiceBackground {
     processingState: AudioProcessingState.none,
     playing: false,
     actions: Set(),
+    position: Duration.zero,
+    bufferedPosition: Duration.zero,
+    speed: 1.0,
+    repeatMode: AudioServiceRepeatMode.none,
+    shuffleMode: AudioServiceShuffleMode.none,
   );
   static MethodChannel _backgroundChannel;
   static PlaybackState _state = _noneState;
+  static List<MediaControl> _controls = [];
+  static List<MediaAction> _systemActions = [];
   static MediaItem _mediaItem;
   static List<MediaItem> _queue;
   static BaseCacheManager _cacheManager;
   static BackgroundAudioTask _task;
+  static bool _running = false;
 
   /// The current media playback state.
   ///
@@ -1075,12 +1217,13 @@ class AudioServiceBackground {
   /// any requests by the client to play, pause and otherwise control audio
   /// playback.
   static Future<void> run(BackgroundAudioTask taskBuilder()) async {
+    _running = true;
     _backgroundChannel =
         const MethodChannel('ryanheise.com/audioServiceBackground');
     WidgetsFlutterBinding.ensureInitialized();
     _task = taskBuilder();
     _cacheManager = _task.cacheManager;
-    _backgroundChannel.setMethodCallHandler((MethodCall call) async {
+    final handler = (MethodCall call) async {
       try {
         switch (call.method) {
           case 'onLoadChildren':
@@ -1211,7 +1354,15 @@ class AudioServiceBackground {
         print('$stacktrace');
         throw PlatformException(code: '$e');
       }
-    });
+    };
+    // Mock method call handlers only work in one direction so we need to set up
+    // a separate channel for each direction when testing.
+    if (_testing) {
+      MethodChannel('ryanheise.com/audioServiceBackgroundInverse')
+          .setMockMethodCallHandler(handler);
+    } else {
+      _backgroundChannel.setMethodCallHandler(handler);
+    }
     Map startParams = await _backgroundChannel.invokeMethod('ready');
     Duration fastForwardInterval =
         Duration(milliseconds: startParams['fastForwardInterval']);
@@ -1229,24 +1380,34 @@ class AudioServiceBackground {
       // For now, we return successfully from AudioService.start regardless of
       // whether an exception occurred in onStart.
       await _backgroundChannel.invokeMethod('started');
+      if (!AudioService.usesIsolate) {
+        AudioService._startedNonIsolate();
+      }
     }
   }
 
   /// Shuts down the background audio task within the background isolate.
   static Future<void> _shutdown() async {
+    if (!_running) return;
+    // Set this to false immediately so that if duplicate shutdown requests come
+    // through, they are ignored.
+    _running = false;
     final audioSession = await AudioSession.instance;
     try {
       await audioSession.setActive(false);
     } catch (e) {
       print("While deactivating audio session: $e");
     }
+    _state = _noneState;
+    _controls = [];
+    _systemActions = [];
+    _queue = [];
     await _backgroundChannel.invokeMethod('stopped');
     if (kIsWeb) {
     } else if (Platform.isIOS) {
       FlutterIsolate.current?.kill();
     }
     _backgroundChannel.setMethodCallHandler(null);
-    _state = _noneState;
   }
 
   /// Broadcasts to all clients the current state, including:
@@ -1296,7 +1457,7 @@ class AudioServiceBackground {
   ///
   /// On Android, a media notification has a compact and expanded form. In the
   /// compact view, you can optionally specify the indices of up to 3 of your
-  /// [controls] that you would like to be shown.
+  /// [controls] that you would like to be shown via [androidCompactActions].
   ///
   /// The playback [position] should NOT be updated continuously in real time.
   /// Instead, it should be updated only when the normal continuity of time is
@@ -1308,18 +1469,30 @@ class AudioServiceBackground {
   ///
   /// The playback [speed] is given as a double where 1.0 means normal speed.
   static Future<void> setState({
-    @required List<MediaControl> controls,
-    List<MediaAction> systemActions = const [],
-    @required AudioProcessingState processingState,
-    @required bool playing,
-    Duration position = Duration.zero,
-    Duration bufferedPosition = Duration.zero,
-    double speed = 1.0,
-    Duration updateTime,
+    List<MediaControl> controls,
+    List<MediaAction> systemActions,
+    AudioProcessingState processingState,
+    bool playing,
+    Duration position,
+    Duration bufferedPosition,
+    double speed,
+    DateTime updateTime,
     List<int> androidCompactActions,
     AudioServiceRepeatMode repeatMode = AudioServiceRepeatMode.none,
     AudioServiceShuffleMode shuffleMode = AudioServiceShuffleMode.none,
   }) async {
+    controls ??= _controls;
+    systemActions ??= _systemActions;
+    processingState ??= _state.processingState;
+    playing ??= _state.playing;
+    position ??= _state.currentPosition;
+    updateTime ??= DateTime.now();
+    bufferedPosition ??= _state.bufferedPosition;
+    speed ??= _state.speed ?? 1.0;
+    repeatMode ??= AudioServiceRepeatMode.none;
+    shuffleMode ??= AudioServiceShuffleMode.none;
+    _controls = controls;
+    _systemActions = systemActions;
     _state = PlaybackState(
       processingState: processingState,
       playing: playing,
@@ -1348,7 +1521,7 @@ class AudioServiceBackground {
       position.inMilliseconds,
       bufferedPosition.inMilliseconds,
       speed,
-      updateTime?.inMilliseconds,
+      updateTime?.millisecondsSinceEpoch,
       androidCompactActions,
       repeatMode.index,
       shuffleMode.index,
@@ -1483,7 +1656,8 @@ abstract class BackgroundAudioTask {
   /// Subclasses may supply a [cacheManager] to manage the loading of artwork,
   /// or an instance of [DefaultCacheManager] will be used by default.
   BackgroundAudioTask({BaseCacheManager cacheManager})
-      : this.cacheManager = cacheManager ?? DefaultCacheManager();
+      : this.cacheManager =
+            cacheManager ?? (_testing ? null : DefaultCacheManager());
 
   /// The fast forward interval passed into [AudioService.start].
   Duration get fastForwardInterval => _fastForwardInterval;
@@ -1670,16 +1844,25 @@ abstract class BackgroundAudioTask {
   /// service, and you may override this method to do any cleanup. For example:
   ///
   /// ```dart
-  /// void onTaskRemoved() {
+  /// Future<void> onTaskRemoved() {
   ///   if (!AudioServiceBackground.state.playing) {
-  ///     onStop();
+  ///     await onStop();
   ///   }
   /// }
   /// ```
   Future<void> onTaskRemoved() async {}
 
   /// Called on Android when the user swipes away the notification. The default
-  /// implementation (which you may override) calls [onStop].
+  /// implementation (which you may override) calls [onStop]. Note that by
+  /// default, the service runs in the foreground state which (despite the name)
+  /// allows the service to run at a high priority in the background without the
+  /// operating system killing it. While in the foreground state, the
+  /// notification cannot be swiped away. You can pass a parameter value of
+  /// `true` for `androidStopForegroundOnPause` in the [AudioService.start]
+  /// method if you would like the service to exit the foreground state when
+  /// playback is paused. This will allow the user to swipe the notification
+  /// away while playback is paused (but it will also allow the operating system
+  /// to kill your service at any time to free up resources).
   Future<void> onClose() => onStop();
 
   void _setParams({
@@ -1697,7 +1880,8 @@ abstract class BackgroundAudioTask {
     int i = queue.indexOf(mediaItem);
     if (i == -1) return;
     int newIndex = i + offset;
-    if (newIndex < queue.length) await onSkipToQueueItem(queue[newIndex]?.id);
+    if (newIndex >= 0 && newIndex < queue.length)
+      await onSkipToQueueItem(queue[newIndex]?.id);
   }
 }
 
@@ -1774,3 +1958,39 @@ class _AudioServiceWidgetState extends State<AudioServiceWidget>
 enum AudioServiceShuffleMode { none, all, group }
 
 enum AudioServiceRepeatMode { none, one, all, group }
+
+class _AsyncTaskQueue {
+  final _queuedAsyncTaskController = StreamController<_AsyncTaskQueueEntry>();
+
+  _AsyncTaskQueue() {
+    _process();
+  }
+
+  Future<void> _process() async {
+    await for (var entry in _queuedAsyncTaskController.stream) {
+      try {
+        final result = await entry.asyncTask();
+        entry.completer.complete(result);
+      } catch (e, stacktrace) {
+        entry.completer.completeError(e, stacktrace);
+      }
+    }
+  }
+
+  Future<dynamic> schedule(_AsyncTask asyncTask) async {
+    final completer = Completer<dynamic>();
+    _queuedAsyncTaskController.add(_AsyncTaskQueueEntry(asyncTask, completer));
+    return completer.future;
+  }
+}
+
+class _AsyncTaskQueueEntry {
+  final _AsyncTask asyncTask;
+  final Completer completer;
+
+  _AsyncTaskQueueEntry(this.asyncTask, this.completer);
+}
+
+typedef _AsyncTask = Future<dynamic> Function();
+
+bool get _testing => HttpOverrides.current != null;

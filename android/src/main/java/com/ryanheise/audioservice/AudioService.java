@@ -62,6 +62,7 @@ public class AudioService extends MediaBrowserServiceCompat {
 	static String androidNotificationChannelDescription;
 	static Integer notificationColor;
 	static String androidNotificationIcon;
+	static boolean androidShowNotificationBadge;
 	static boolean androidNotificationClickStartsActivity;
 	static boolean androidNotificationOngoing;
 	static boolean androidStopForegroundOnPause;
@@ -77,7 +78,7 @@ public class AudioService extends MediaBrowserServiceCompat {
 	private static int shuffleMode;
 	private static boolean notificationCreated;
 
-	public static void init(Activity activity, boolean resumeOnClick, String androidNotificationChannelName, String androidNotificationChannelDescription, String action, Integer notificationColor, String androidNotificationIcon, boolean androidNotificationClickStartsActivity, boolean androidNotificationOngoing, boolean androidStopForegroundOnPause, Size artDownscaleSize, ServiceListener listener) {
+	public static void init(Activity activity, boolean resumeOnClick, String androidNotificationChannelName, String androidNotificationChannelDescription, String action, Integer notificationColor, String androidNotificationIcon, boolean androidShowNotificationBadge, boolean androidNotificationClickStartsActivity, boolean androidNotificationOngoing, boolean androidStopForegroundOnPause, Size artDownscaleSize, ServiceListener listener) {
 		if (running)
 			throw new IllegalStateException("AudioService already running");
 		running = true;
@@ -92,6 +93,7 @@ public class AudioService extends MediaBrowserServiceCompat {
 		AudioService.androidNotificationChannelDescription = androidNotificationChannelDescription;
 		AudioService.notificationColor = notificationColor;
 		AudioService.androidNotificationIcon = androidNotificationIcon;
+		AudioService.androidShowNotificationBadge = androidShowNotificationBadge;
 		AudioService.androidNotificationClickStartsActivity = androidNotificationClickStartsActivity;
 		AudioService.androidNotificationOngoing = androidNotificationOngoing;
 		AudioService.androidStopForegroundOnPause = androidStopForegroundOnPause;
@@ -158,8 +160,13 @@ public class AudioService extends MediaBrowserServiceCompat {
 		mediaSession.setActive(false);
 		releaseWakeLock();
 		stopForeground(true);
-		notificationCreated = false;
 		stopSelf();
+		// This still does not solve the Android 11 problem.
+		// if (notificationCreated) {
+		// 	NotificationManager notificationManager = (NotificationManager)getSystemService(Context.NOTIFICATION_SERVICE);
+		// 	notificationManager.cancel(NOTIFICATION_ID);
+		// }
+		notificationCreated = false;
 	}
 
 	public static boolean isRunning() {
@@ -325,6 +332,7 @@ public class AudioService extends MediaBrowserServiceCompat {
 		NotificationChannel channel = notificationManager.getNotificationChannel(notificationChannelId);
 		if (channel == null) {
 			channel = new NotificationChannel(notificationChannelId, androidNotificationChannelName, NotificationManager.IMPORTANCE_LOW);
+			channel.setShowBadge(androidShowNotificationBadge);
 			if (androidNotificationChannelDescription != null)
 				channel.setDescription(androidNotificationChannelDescription);
 			notificationManager.createNotificationChannel(channel);
