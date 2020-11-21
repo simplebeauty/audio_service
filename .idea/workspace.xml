@@ -2,6 +2,7 @@
 <project version="4">
   <component name="ChangeListManager">
     <list default="true" id="eefc2d08-942e-4de5-8c33-946bd5e126b4" name="Default Changelist" comment="">
+      <change beforePath="$PROJECT_DIR$/.idea/gradle.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/gradle.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/libraries/Dart_Packages.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/libraries/Dart_Packages.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
     </list>
@@ -28,7 +29,6 @@
   <component name="ProjectId" id="1hzqVkdKKXoCGKmmhc0cBujor86" />
   <component name="ProjectViewState">
     <option name="hideEmptyMiddlePackages" value="true" />
-    <option name="showExcludedFiles" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
   <component name="PropertiesComponent">
@@ -41,6 +41,7 @@
     <property name="RunOnceActivity.ShowReadmeOnStart" value="true" />
     <property name="android.sdk.path" value="$PROJECT_DIR$/../../../../../Android/sdk" />
     <property name="dart.analysis.tool.window.force.activate" value="false" />
+    <property name="dart.analysis.tool.window.visible" value="false" />
     <property name="last_opened_file_path" value="$PROJECT_DIR$/../../../../../workspace" />
     <property name="settings.editor.selected.configurable" value="AndroidSdkUpdater" />
     <property name="show.migrate.to.gradle.popup" value="false" />
@@ -157,6 +158,22 @@
     <state x="960" y="-957" width="1720" height="857" key="DiffContextDialog/860.-1057.1920.1057/-1700.-1417.2560.1417/0.23.1644.1027@860.-1057.1920.1057" timestamp="1601052304578" />
     <state x="960" y="-957" width="1720" height="857" key="DiffContextDialog/860.-1080.1920.1080/-1700.-1417.2560.1417/0.23.1644.1027@860.-1080.1920.1080" timestamp="1601055609806" />
     <state x="960" y="-957" width="1720" height="857" key="DiffContextDialog/860.-1080.1920.1080/-1700.-1440.2560.1440/0.0.1680.1050@860.-1080.1920.1080" timestamp="1601056817822" />
+    <state width="1638" height="276" key="GridCell.Tab.0.bottom" timestamp="1605981820275">
+      <screen x="0" y="0" width="1680" height="1050" />
+    </state>
+    <state width="1638" height="276" key="GridCell.Tab.0.bottom/-411.-1440.2560.1440/0.0.1680.1050@0.0.1680.1050" timestamp="1605981820275" />
+    <state width="1638" height="276" key="GridCell.Tab.0.center" timestamp="1605981820273">
+      <screen x="0" y="0" width="1680" height="1050" />
+    </state>
+    <state width="1638" height="276" key="GridCell.Tab.0.center/-411.-1440.2560.1440/0.0.1680.1050@0.0.1680.1050" timestamp="1605981820273" />
+    <state width="1638" height="276" key="GridCell.Tab.0.left" timestamp="1605981820271">
+      <screen x="0" y="0" width="1680" height="1050" />
+    </state>
+    <state width="1638" height="276" key="GridCell.Tab.0.left/-411.-1440.2560.1440/0.0.1680.1050@0.0.1680.1050" timestamp="1605981820271" />
+    <state width="1638" height="276" key="GridCell.Tab.0.right" timestamp="1605981820274">
+      <screen x="0" y="0" width="1680" height="1050" />
+    </state>
+    <state width="1638" height="276" key="GridCell.Tab.0.right/-411.-1440.2560.1440/0.0.1680.1050@0.0.1680.1050" timestamp="1605981820274" />
     <state x="1469" y="-696" key="com.intellij.ide.util.TipDialog" timestamp="1601190344922">
       <screen x="860" y="-1080" width="1920" height="1080" />
     </state>
